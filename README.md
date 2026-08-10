@@ -31,11 +31,16 @@ if (const auto error = safaia.start()) {
 }
 
 while (applicationRunning) {
+    paceOrWaitForHostEvent();
     update();
     (void)runtime.poll();
     render();
 }
 ```
+
+`paceOrWaitForHostEvent()` 代表宿主提供的 GUI 事件等待、垂直同步或帧率限制。`Runtime::poll()` 只执行已经就绪的网络事件，从不等待 I/O；如果 `update()`、`render()` 和宿主事件循环都不阻塞，调用方必须自行休眠或限帧，否则外层循环会忙等并占用一个 CPU 核心。事件驱动 GUI 更适合用框架定时器每 8～16ms 调用一次 `poll()`，而不是另建无节流循环。
+
+一次 `poll()` 会批量处理就绪事件，直到队列暂时排空、达到 `maxEvents` 或达到 `timeBudget`。`PollResult::eventsProcessed` 统计 Asio completion handler，不等同于日志条数；TCP 读取、定时器、accept 和写入完成也计入其中。调用方可在触及任一预算上限时立即继续 `poll()`，仅在本轮排空后进入休眠或等待。
 
 `LogEvent` 拥有 `message` 和 `source` 字符串，回调中可安全复制或转移到上层队列。Safaia 日志载荷和 `DiagnosticEvent::message` 均以 UTF-8 字节串交付；Windows 系统错误会先从本地代码页转换为 UTF-8。Safaia 协议 4 没有可靠的等级字段，因此当前 `level` 为 `LogLevel::unknown`，上层可按自身日志格式二次分类。
 
@@ -50,7 +55,7 @@ while (applicationRunning) {
 - MCDevLink 核心不调用 `std::thread`、`CreateThread` 或 `pthread_create`。
 - 一个 `Runtime` 同一时刻只能由一个线程调用 `poll()`；回调、`send()` 和 handler 修改也应在该线程进行。
 - `SafaiaService` 必须先于关联的 `Runtime` 析构。服务实例一次启动；停止后如需重启，重新构造服务。
-- `poll()` 默认限制事件数和处理时间，避免宿主主线程被网络事件长期占用。
+- `poll()` 默认限制事件数和处理时间，避免宿主主线程被网络事件长期占用；该预算不是等待时间，空闲时会立即返回。
 - `MCDevLink` 是 C++ 静态 CMake target，不生成需要部署的 DLL。CMake 不设置 `/MT`、`/MD` 或 `CMAKE_MSVC_RUNTIME_LIBRARY`，在 `add_subdirectory` 模式下继承上层工程的运行库选择。
 
 ## 协议扩展

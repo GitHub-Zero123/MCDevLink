@@ -26,6 +26,8 @@
 
 示例程序仅在展示层按文本启发式着色，不改变核心 `LogEvent`：`[INFO][Developer]` 深灰、含 `SUC` 的行绿色、`ERROR`/`FATAL`/Python traceback 红色、`WARN` 黄色、`DEBUG` 青色，其余使用控制台默认色。程序会流式处理跨 payload 残行和多行 payload；协议 4 原始 payload 仍可通过核心帧回调获取。
 
+接收循环使用非阻塞 `Runtime::poll()` 批量处理就绪 handler；未触及事件数或时间预算上限时休眠 33ms，避免空闲忙等。触及任一上限表示可能仍有事件积压，此时不休眠并继续分批处理。
+
 ## 验收项
 
 1. 冷启动发现：Minecraft 启动后，接收端出现 `connected`，随后出现 `ready`。

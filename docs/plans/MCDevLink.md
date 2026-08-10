@@ -103,13 +103,14 @@ Runtime runtime;
 
 while (running)
 {
+    paceOrWaitForHostEvent();
     update();
     runtime.poll();
     render();
 }
 ```
 
-`poll()` 必须非阻塞。
+`poll()` 必须非阻塞，时间预算只限制单次处理量，不承担循环节流。宿主必须通过 GUI 事件等待、垂直同步、帧率限制或显式休眠控制调用频率；当其他步骤均不阻塞时，禁止直接使用无节流循环。
 
 同时提供事件预算，防止网络事件过多导致主线程卡顿：
 
@@ -132,7 +133,7 @@ io_context::poll_one()
 * 最大事件数量
 * 最大执行时间
 
-限制单次处理量。
+限制单次处理量。一次 `poll()` 会循环处理一批就绪 handler，而不是只处理一条日志；事件计数包含网络读写、accept 和 timer 等 completion handler，不能解释为日志数量。
 
 ---
 

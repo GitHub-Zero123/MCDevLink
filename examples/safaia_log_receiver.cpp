@@ -362,9 +362,12 @@ int main(int argc, char** argv) {
               << ":26613..26622\n";
 
     std::signal(SIGINT, stop);
+    constexpr auto idlePollInterval = std::chrono::milliseconds{33};
     while (running.load()) {
-        (void)runtime.poll({256, std::chrono::microseconds{1000}});
-        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        const auto result = runtime.poll({256, std::chrono::microseconds{1000}});
+        if (!result.eventLimitReached && !result.timeLimitReached) {
+            std::this_thread::sleep_for(idlePollInterval);
+        }
     }
     service.stop();
     logPrinter.flushAll();
