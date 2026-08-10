@@ -24,6 +24,8 @@
 
 程序在 Windows 启动时会保存原控制台代码页，将输入、输出切换为 UTF-8，并在正常退出时恢复；设置失败会报告 Win32 错误码并退出，避免把 socket 收到的 UTF-8 日志按系统代码页误显示或污染后续 CMake 配置。随后程序应输出 TCP 监听地址、随机监听端口和实际枚举到的 discovery 目标。程序会过滤未启用接口和非 Preferred 地址，再向其余本机 IPv4 的 `26613..26622` 单播；这包括游戏可能用于 Safaia UDP socket 的虚拟网卡地址。本机模式仍只监听 `127.0.0.1`；跨设备模式监听命令行传入的宿主局域网 IPv4，而不是默认暴露全部网卡。保持程序运行，再启动 Minecraft 并进入能产生脚本日志的环境。
 
+示例程序仅在展示层按文本启发式着色，不改变核心 `LogEvent`：`[INFO][Developer]` 深灰、含 `SUC` 的行绿色、`ERROR`/`FATAL`/Python traceback 红色、`WARN` 黄色、`DEBUG` 青色，其余使用控制台默认色。程序会流式处理跨 payload 残行和多行 payload；协议 4 原始 payload 仍可通过核心帧回调获取。
+
 ## 验收项
 
 1. 冷启动发现：Minecraft 启动后，接收端出现 `connected`，随后出现 `ready`。
