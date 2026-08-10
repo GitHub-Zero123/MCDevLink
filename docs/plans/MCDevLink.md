@@ -1,8 +1,8 @@
-# RuntimeLink 设计计划
+# MCDevLink 设计计划
 
 ## 1. 项目定位
 
-`RuntimeLink` 是一个轻量、跨平台的 C++20 通信后端库，用于在运行中的应用与开发工具之间建立通信。
+`MCDevLink` 是一个轻量、跨平台的 C++20 通信后端库，用于在运行中的应用与开发工具之间建立通信。
 
 目标平台：
 
@@ -27,7 +27,7 @@
 
 ### 无内部线程
 
-RuntimeLink **不得主动创建线程**。
+MCDevLink **不得主动创建线程**。
 
 禁止核心库内部依赖：
 
@@ -86,7 +86,7 @@ Linux    -> epoll
 macOS    -> kqueue
 ```
 
-RuntimeLink 不自行封装 IOCP/epoll。
+MCDevLink 不自行封装 IOCP/epoll。
 
 ---
 
@@ -177,7 +177,7 @@ asio::ip::tcp::socket&
 asio::awaitable<>
 ```
 
-出现在 RuntimeLink 公共接口中。
+出现在 MCDevLink 公共接口中。
 
 使用 PImpl 隔离：
 
@@ -202,7 +202,7 @@ Asio 仅存在于内部 `.cpp` / private headers。
 
 * 降低编译开销
 * 隔离第三方依赖
-* 保持稳定 API / ABI
+* 保持公共 API 与私有实现的边界
 * 未来允许替换网络实现
 
 ---
@@ -210,7 +210,7 @@ Asio 仅存在于内部 `.cpp` / private headers。
 ## 7. 模块划分
 
 ```text
-RuntimeLink
+MCDevLink
 │
 ├─ Core
 │  ├─ Runtime
@@ -269,8 +269,8 @@ Safaia Protocol
 
 ```text
 TCP + Safaia
-TCP + RuntimeLink Native Protocol
-WebSocket + RuntimeLink Protocol
+TCP + MCDevLink Native Protocol
+WebSocket + MCDevLink Protocol
 ```
 
 ---
@@ -360,7 +360,7 @@ struct LogEvent
 
 协议缺失的字段允许为空。
 
-上层只依赖 RuntimeLink 的 `LogEvent`，不依赖 Safaia。
+上层只依赖 MCDevLink 的 `LogEvent`，不依赖 Safaia。
 
 ---
 
@@ -373,7 +373,20 @@ struct LogEvent
 ```text
 C++20
 Standalone Asio
+nlohmann/json（仅私有实现使用，不进入公共 API）
 ```
+
+两项头文件依赖均固定版本直接放入 `third_party/`，保证上层工程和 Android NDK 可离线配置。
+
+### 构建与链接形态
+
+MCDevLink 以源码目录通过 `add_subdirectory()` 加入上层 C++ 工程，并提供静态 target：
+
+```cmake
+target_link_libraries(host PRIVATE MCDevLink::MCDevLink)
+```
+
+不生成需要随程序部署的 MCDevLink DLL，也不提供预先固定 MSVC 运行库的二进制包。核心 target 不设置 `/MT`、`/MD` 或 `CMAKE_MSVC_RUNTIME_LIBRARY`，由上层工程在同一次 CMake 配置中决定。
 
 尽量避免：
 
@@ -408,10 +421,10 @@ Asio 内部也避免直接：
 ## 12. 第一阶段目录
 
 ```text
-RuntimeLink/
+MCDevLink/
 ├─ CMakeLists.txt
 ├─ include/
-│  └─ RuntimeLink/
+│  └─ MCDevLink/
 │     ├─ Runtime.hpp
 │     ├─ Endpoint.hpp
 │     ├─ Session.hpp
@@ -473,7 +486,7 @@ RuntimeLink/
 
 ## 14. 设计目标
 
-RuntimeLink 最终应满足：
+MCDevLink 最终应满足：
 
 ```text
 轻量
@@ -485,10 +498,10 @@ C++20 Coroutine
 协议与网络解耦
 Asio 不泄漏到公共 API
 低依赖
-可嵌入游戏 / APK / EXE / DLL
+可静态嵌入游戏 / APK / EXE / 宿主 DLL
 ```
 
 核心设计理念：
 
-> RuntimeLink 不拥有线程，只拥有事件循环。
-> 宿主决定 RuntimeLink 在哪个线程、什么时候运行。
+> MCDevLink 不拥有线程，只拥有事件循环。
+> 宿主决定 MCDevLink 在哪个线程、什么时候运行。

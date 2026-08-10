@@ -1,0 +1,3 @@
+add_executable(mcdevlink_safaia_log_receiver safaia_log_receiver.cpp)
+target_link_libraries(mcdevlink_safaia_log_receiver PRIVATE MCDevLink::MCDevLink)
+set_target_properties(mcdevlink_safaia_log_receiver PROPERTIES CXX_EXTENSIONS OFF)
