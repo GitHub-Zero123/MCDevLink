@@ -23,6 +23,19 @@
 #include <asio/write.hpp>
 #include <nlohmann/json.hpp>
 
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <windows.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#else
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -35,6 +48,7 @@
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace MCDevLink::Protocol {
@@ -79,6 +93,121 @@ void cancelTimer(asio::steady_timer& timer) noexcept {
         (void)timer.cancel();
     } catch (...) {
     }
+}
+
+std::string errorMessageUtf8(const asio::error_code& error) {
+#if defined(_WIN32)
+    const auto localMessage = error.message();
+    if (!localMessage.empty()) {
+        const auto wideSize = MultiByteToWideChar(
+            CP_ACP, 0, localMessage.data(), static_cast<int>(localMessage.size()), nullptr, 0);
+        if (wideSize > 0) {
+            std::wstring wideMessage(static_cast<std::size_t>(wideSize), L'\0');
+            if (MultiByteToWideChar(
+                    CP_ACP, 0, localMessage.data(), static_cast<int>(localMessage.size()),
+                    wideMessage.data(), wideSize) == wideSize) {
+                const auto utf8Size = WideCharToMultiByte(
+                    CP_UTF8, 0, wideMessage.data(), wideSize, nullptr, 0, nullptr, nullptr);
+                if (utf8Size > 0) {
+                    std::string utf8Message(static_cast<std::size_t>(utf8Size), '\0');
+                    if (WideCharToMultiByte(
+                            CP_UTF8, 0, wideMessage.data(), wideSize, utf8Message.data(), utf8Size,
+                            nullptr, nullptr) == utf8Size) {
+                        return utf8Message;
+                    }
+                }
+            }
+        }
+    }
+    return "Windows error " + std::to_string(error.value());
+#else
+    return error.message();
+#endif
+}
+
+void appendUniqueAddress(std::vector<std::string>& addresses, const char* address) {
+    if (address == nullptr || address[0] == '\0') {
+        return;
+    }
+    const std::string_view value{address};
+    if (value == "0.0.0.0") {
+        return;
+    }
+    if (std::find(addresses.begin(), addresses.end(), address) == addresses.end()) {
+        addresses.emplace_back(address);
+    }
+}
+
+std::vector<std::string> enumerateLocalIPv4() {
+    std::vector<std::string> addresses{"127.0.0.1"};
+
+#if defined(_WIN32)
+    ULONG bufferSize = 15U * 1024U;
+    std::vector<unsigned char> buffer(bufferSize);
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+        const auto result = GetAdaptersAddresses(
+            AF_INET,
+            GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+            nullptr, adapters, &bufferSize);
+        if (result == ERROR_BUFFER_OVERFLOW) {
+            buffer.resize(bufferSize);
+            continue;
+        }
+        if (result != NO_ERROR) {
+            return addresses;
+        }
+
+        for (auto* adapter = adapters; adapter != nullptr; adapter = adapter->Next) {
+            if (adapter->OperStatus != IfOperStatusUp) {
+                continue;
+            }
+            for (auto* unicast = adapter->FirstUnicastAddress; unicast != nullptr;
+                 unicast = unicast->Next) {
+                if (unicast->Address.lpSockaddr == nullptr
+                    || unicast->Address.lpSockaddr->sa_family != AF_INET
+                    || unicast->DadState != IpDadStatePreferred) {
+                    continue;
+                }
+                const auto* endpoint =
+                    reinterpret_cast<const sockaddr_in*>(unicast->Address.lpSockaddr);
+                char text[INET_ADDRSTRLEN]{};
+                appendUniqueAddress(
+                    addresses, inet_ntop(AF_INET, &endpoint->sin_addr, text, sizeof(text)));
+            }
+        }
+        return addresses;
+    }
+#else
+    ifaddrs* rawInterfaces = nullptr;
+    if (getifaddrs(&rawInterfaces) != 0) {
+        return addresses;
+    }
+    const std::unique_ptr<ifaddrs, decltype(&freeifaddrs)> interfaces(rawInterfaces, freeifaddrs);
+    for (auto* interface = interfaces.get(); interface != nullptr; interface = interface->ifa_next) {
+        if (interface->ifa_addr == nullptr || interface->ifa_addr->sa_family != AF_INET
+            || (interface->ifa_flags & IFF_UP) == 0) {
+            continue;
+        }
+        const auto* endpoint = reinterpret_cast<const sockaddr_in*>(interface->ifa_addr);
+        char text[INET_ADDRSTRLEN]{};
+        appendUniqueAddress(
+            addresses, inet_ntop(AF_INET, &endpoint->sin_addr, text, sizeof(text)));
+    }
+#endif
+
+    return addresses;
+}
+
+std::string joinAddresses(const std::vector<std::string>& addresses) {
+    std::string result;
+    for (const auto& address : addresses) {
+        if (!result.empty()) {
+            result += ", ";
+        }
+        result += address;
+    }
+    return result;
 }
 
 } // namespace
@@ -165,7 +294,7 @@ public:
             return false;
         }
         if (options.discoveryEnabled) {
-            if (options.discoveryPortCount == 0 || options.discoveryTargets.empty()) {
+            if (options.discoveryPortCount == 0) {
                 return false;
             }
             const auto lastPort = static_cast<std::uint32_t>(options.discoveryPortFirst)
@@ -183,11 +312,19 @@ public:
         if (error) {
             return false;
         }
-        for (const auto& target : options.discoveryTargets) {
+        const auto targets = options.discoveryTargets.empty()
+            ? enumerateLocalIPv4()
+            : options.discoveryTargets;
+        std::vector<std::string> uniqueTargets;
+        for (const auto& target : targets) {
             const auto address = asio::ip::make_address_v4(target, error);
             if (error) {
                 return false;
             }
+            if (std::find(uniqueTargets.begin(), uniqueTargets.end(), target) != uniqueTargets.end()) {
+                continue;
+            }
+            uniqueTargets.push_back(target);
             for (std::uint32_t offset = 0; offset < options.discoveryPortCount; ++offset) {
                 discoveryEndpoints.emplace_back(
                     address, static_cast<std::uint16_t>(options.discoveryPortFirst + offset));
@@ -209,6 +346,8 @@ public:
             {"ip", options.advertiseAddress},
             {"port", local.port},
         });
+        emitDiagnostic(
+            DiagnosticLevel::info, "Safaia discovery targets: " + joinAddresses(uniqueTargets));
         return true;
     }
 
@@ -219,7 +358,9 @@ public:
             co_await acceptor.async_accept(socket, asio::redirect_error(asio::use_awaitable, error));
             if (error) {
                 if (running && error != asio::error::operation_aborted) {
-                    emitDiagnostic(DiagnosticLevel::error, "Safaia TCP accept failed: " + error.message());
+                    emitDiagnostic(
+                        DiagnosticLevel::error,
+                        "Safaia TCP accept failed: " + errorMessageUtf8(error));
                     stop();
                 }
                 co_return;
@@ -240,10 +381,14 @@ public:
                         asio::buffer(discoveryPayload), endpoint,
                         asio::redirect_error(asio::use_awaitable, error));
                     if (error && error != asio::error::operation_aborted && running) {
-                        emitDiagnostic(
-                            DiagnosticLevel::warning,
-                            "Safaia discovery send failed for " + endpoint.address().to_string() + ":"
-                                + std::to_string(endpoint.port()) + ": " + error.message());
+                        const auto address = endpoint.address().to_string();
+                        if (reportedDiscoveryFailureAddresses.insert(address).second) {
+                            emitDiagnostic(
+                                DiagnosticLevel::warning,
+                                "Safaia discovery send failed for " + address + ":"
+                                    + std::to_string(endpoint.port()) + ": "
+                                    + errorMessageUtf8(error));
+                        }
                     }
                 }
             }
@@ -324,6 +469,7 @@ public:
     Udp::socket discoverySocket;
     asio::steady_timer discoveryTimer;
     std::vector<Udp::endpoint> discoveryEndpoints;
+    std::unordered_set<std::string> reportedDiscoveryFailureAddresses;
     std::string discoveryPayload;
     Endpoint local;
     bool running = false;

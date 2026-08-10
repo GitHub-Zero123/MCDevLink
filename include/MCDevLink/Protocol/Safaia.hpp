@@ -33,7 +33,8 @@ inline constexpr std::int32_t connectBlocked = 49;
 struct SafaiaOptions {
     Endpoint bindEndpoint{"127.0.0.1", 0};
     std::string advertiseAddress{"127.0.0.1"};
-    std::vector<std::string> discoveryTargets{"127.0.0.1"};
+    // Empty selects every local IPv4 address. Explicit values disable auto-discovery.
+    std::vector<std::string> discoveryTargets;
     std::uint16_t discoveryPortFirst = 26613;
     std::uint16_t discoveryPortCount = 10;
     std::chrono::milliseconds discoveryInterval{500};

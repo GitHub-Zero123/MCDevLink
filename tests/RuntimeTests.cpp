@@ -29,6 +29,7 @@ int main() {
     MCDevLink::Protocol::SafaiaOptions options;
     CHECK(options.bindEndpoint.address == "127.0.0.1");
     CHECK(options.bindEndpoint.port == 0);
+    CHECK(options.discoveryTargets.empty());
     options.discoveryEnabled = false;
 
     MCDevLink::Protocol::SafaiaService service(runtime, options);

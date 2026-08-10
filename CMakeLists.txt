@@ -41,7 +41,7 @@ target_include_directories(
 
 if(WIN32)
     target_compile_definitions(MCDevLink PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-    target_link_libraries(MCDevLink PRIVATE ws2_32)
+    target_link_libraries(MCDevLink PRIVATE iphlpapi ws2_32)
 endif()
 
 set_target_properties(
