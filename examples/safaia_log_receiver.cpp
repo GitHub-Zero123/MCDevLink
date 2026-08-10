@@ -8,6 +8,13 @@
 #include <string>
 #include <thread>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace {
 
 std::atomic<bool> running = true;
@@ -25,14 +32,43 @@ const char* stateName(const MCDevLink::SessionState state) {
     return "unknown";
 }
 
+#if defined(_WIN32)
+bool configureConsoleUtf8() {
+    DWORD inputError = ERROR_SUCCESS;
+    if (!SetConsoleCP(CP_UTF8)) {
+        inputError = GetLastError();
+    }
+
+    DWORD outputError = ERROR_SUCCESS;
+    if (!SetConsoleOutputCP(CP_UTF8)) {
+        outputError = GetLastError();
+    }
+
+    if (inputError == ERROR_SUCCESS && outputError == ERROR_SUCCESS) {
+        return true;
+    }
+
+    std::cerr << "Failed to configure the Windows console for UTF-8"
+              << " (input error=" << inputError << ", output error=" << outputError << ")\n";
+    return false;
+}
+#endif
+
 } // namespace
 
 int main(int argc, char** argv) {
+#if defined(_WIN32)
+    if (!configureConsoleUtf8()) {
+        return 1;
+    }
+#endif
+
     const std::string advertiseAddress = argc > 1 ? argv[1] : "127.0.0.1";
     const std::string discoveryTarget = argc > 2 ? argv[2] : advertiseAddress;
 
     MCDevLink::Runtime runtime;
     MCDevLink::Protocol::SafaiaOptions options;
+    options.bindEndpoint.address = advertiseAddress;
     options.advertiseAddress = advertiseAddress;
     options.discoveryTargets = {discoveryTarget};
 

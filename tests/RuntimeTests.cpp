@@ -27,7 +27,8 @@ int main() {
     CHECK(!result.eventLimitReached);
 
     MCDevLink::Protocol::SafaiaOptions options;
-    options.bindEndpoint = {"127.0.0.1", 0};
+    CHECK(options.bindEndpoint.address == "127.0.0.1");
+    CHECK(options.bindEndpoint.port == 0);
     options.discoveryEnabled = false;
 
     MCDevLink::Protocol::SafaiaService service(runtime, options);
@@ -40,6 +41,12 @@ int main() {
     service.stop();
     CHECK(!service.isRunning());
     CHECK(service.start() == std::make_error_code(std::errc::operation_not_permitted));
+
+    MCDevLink::Protocol::SafaiaOptions emptyBind;
+    emptyBind.bindEndpoint.address.clear();
+    emptyBind.discoveryEnabled = false;
+    MCDevLink::Protocol::SafaiaService emptyBindService(runtime, emptyBind);
+    CHECK(emptyBindService.start() == std::make_error_code(std::errc::invalid_argument));
 
     MCDevLink::Protocol::SafaiaOptions invalid;
     invalid.discoveryEnabled = true;

@@ -106,9 +106,7 @@ public:
         }
 
         asio::error_code error;
-        const auto bindAddress = options.bindEndpoint.address.empty()
-            ? asio::ip::address_v4::any()
-            : asio::ip::make_address_v4(options.bindEndpoint.address, error);
+        const auto bindAddress = asio::ip::make_address_v4(options.bindEndpoint.address, error);
         if (error) {
             return error;
         }

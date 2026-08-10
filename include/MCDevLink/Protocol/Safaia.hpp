@@ -31,7 +31,7 @@ inline constexpr std::int32_t connectBlocked = 49;
 } // namespace SafaiaMessage
 
 struct SafaiaOptions {
-    Endpoint bindEndpoint{"0.0.0.0", 0};
+    Endpoint bindEndpoint{"127.0.0.1", 0};
     std::string advertiseAddress{"127.0.0.1"};
     std::vector<std::string> discoveryTargets{"127.0.0.1"};
     std::uint16_t discoveryPortFirst = 26613;

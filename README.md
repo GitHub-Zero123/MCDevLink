@@ -41,7 +41,9 @@ while (applicationRunning) {
 
 `LogEvent` 拥有 `message` 和 `source` 字符串，回调中可安全复制或转移到上层队列。Safaia 协议 4 没有可靠的等级字段，因此当前 `level` 为 `LogLevel::unknown`，上层可按自身日志格式二次分类。
 
-`advertiseAddress` 是 MC 能访问到的本机 IPv4，`discoveryTargets` 是 discovery 数据报的目标 IPv4。本机运行两者都用 `127.0.0.1`；跨设备时分别设置为宿主局域网地址和游戏设备地址。当前 discovery 只接受 IPv4 字面量，不做 DNS 解析。
+`bindEndpoint` 是 TCP 回连服务的监听端点，默认 `127.0.0.1:0`；端口 `0` 表示由操作系统分配临时端口。空地址是无效配置。只有明确需要从其他设备回连时才修改监听地址，优先绑定宿主的具体局域网 IPv4；只有确实需要监听全部 IPv4 网卡时才显式使用 `0.0.0.0`。
+
+`advertiseAddress` 是通过 discovery 告知 MC 的宿主 IPv4，`discoveryTargets` 是 discovery 数据报的目标 IPv4。本机运行三者都使用 `127.0.0.1`；跨设备时，将 `bindEndpoint.address` 和 `advertiseAddress` 设置为宿主局域网地址，将 `discoveryTargets` 设置为游戏设备地址。监听地址与广播地址相互独立。当前这些地址只接受 IPv4 字面量，不做 DNS 解析。
 
 ## 线程和生命周期
 
