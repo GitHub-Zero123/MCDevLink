@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <csignal>
 #include <iostream>
@@ -312,7 +313,20 @@ int main(int argc, char** argv) {
 #endif
 
     const std::string advertiseAddress = argc > 1 ? argv[1] : "127.0.0.1";
-    const std::string discoveryTarget = argc > 2 ? argv[2] : "";
+    const std::string discoveryTarget = argc > 2 && std::string_view{argv[2]} != "-"
+        ? argv[2]
+        : "";
+    std::uint32_t targetProcessId = 0;
+    if (argc > 3) {
+        const std::string_view text{argv[3]};
+        const auto [end, error] = std::from_chars(
+            text.data(), text.data() + text.size(), targetProcessId);
+        if (error != std::errc{} || end != text.data() + text.size()
+            || targetProcessId == 0) {
+            std::cerr << "Invalid Minecraft process ID: " << text << '\n';
+            return 1;
+        }
+    }
 
     MCDevLink::Runtime runtime;
     MCDevLink::Protocol::SafaiaOptions options;
@@ -321,6 +335,7 @@ int main(int argc, char** argv) {
     if (!discoveryTarget.empty()) {
         options.discoveryTargets = {discoveryTarget};
     }
+    options.targetProcessId = targetProcessId;
 
     MCDevLink::Protocol::SafaiaService service(runtime, std::move(options));
     SafaiaLogPrinter logPrinter;
@@ -359,7 +374,11 @@ int main(int argc, char** argv) {
     std::cout << "Safaia receiver listening on " << endpoint.address << ':' << endpoint.port
               << ", advertising " << advertiseAddress << " to "
               << (discoveryTarget.empty() ? "auto-detected local IPv4 addresses" : discoveryTarget)
-              << ":26613..26622\n";
+              << ":26613..26622";
+    if (targetProcessId != 0) {
+        std::cout << " owned by process " << targetProcessId;
+    }
+    std::cout << '\n';
 
     std::signal(SIGINT, stop);
     constexpr auto idlePollInterval = std::chrono::milliseconds{33};

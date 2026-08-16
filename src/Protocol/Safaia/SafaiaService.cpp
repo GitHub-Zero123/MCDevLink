@@ -210,6 +210,60 @@ std::string joinAddresses(const std::vector<std::string>& addresses) {
     return result;
 }
 
+std::error_code findUdpPortsForProcess(
+    const std::uint32_t processId, const std::uint16_t firstPort,
+    const std::uint16_t portCount, std::vector<std::uint16_t>& ports) {
+    ports.clear();
+#if defined(_WIN32)
+    ULONG bufferSize = 0;
+    auto result = GetExtendedUdpTable(
+        nullptr, &bufferSize, FALSE, AF_INET, UDP_TABLE_OWNER_PID, 0);
+    if (result != ERROR_INSUFFICIENT_BUFFER && result != NO_ERROR) {
+        return {static_cast<int>(result), std::system_category()};
+    }
+    if (bufferSize == 0) {
+        return {};
+    }
+
+    std::vector<std::uint64_t> buffer;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        buffer.resize(
+            (static_cast<std::size_t>(bufferSize) + sizeof(std::uint64_t) - 1U)
+            / sizeof(std::uint64_t));
+        result = GetExtendedUdpTable(
+            buffer.data(), &bufferSize, FALSE, AF_INET, UDP_TABLE_OWNER_PID, 0);
+        if (result == ERROR_INSUFFICIENT_BUFFER) {
+            continue;
+        }
+        if (result != NO_ERROR) {
+            return {static_cast<int>(result), std::system_category()};
+        }
+
+        const auto* table = reinterpret_cast<const MIB_UDPTABLE_OWNER_PID*>(buffer.data());
+        const auto portLimit = static_cast<std::uint32_t>(firstPort) + portCount;
+        for (DWORD index = 0; index < table->dwNumEntries; ++index) {
+            const auto& row = table->table[index];
+            if (row.dwOwningPid != processId) {
+                continue;
+            }
+            const auto port = ntohs(static_cast<u_short>(row.dwLocalPort));
+            if (port >= firstPort && static_cast<std::uint32_t>(port) < portLimit) {
+                ports.push_back(port);
+            }
+        }
+        std::sort(ports.begin(), ports.end());
+        ports.erase(std::unique(ports.begin(), ports.end()), ports.end());
+        return {};
+    }
+    return {static_cast<int>(ERROR_INSUFFICIENT_BUFFER), std::system_category()};
+#else
+    (void)processId;
+    (void)firstPort;
+    (void)portCount;
+    return std::make_error_code(std::errc::operation_not_supported);
+#endif
+}
+
 } // namespace
 
 class SafaiaService::Impl : public std::enable_shared_from_this<SafaiaService::Impl> {
@@ -230,6 +284,11 @@ public:
         if (startedOnce) {
             return std::make_error_code(std::errc::operation_not_permitted);
         }
+#if !defined(_WIN32)
+        if (options.targetProcessId != 0) {
+            return std::make_error_code(std::errc::operation_not_supported);
+        }
+#endif
         if (!context || !validateOptions()) {
             return std::make_error_code(std::errc::invalid_argument);
         }
@@ -293,7 +352,7 @@ public:
             || options.discoveryInterval <= std::chrono::milliseconds::zero()) {
             return false;
         }
-        if (options.discoveryEnabled) {
+        if (options.discoveryEnabled || options.targetProcessId != 0) {
             if (options.discoveryPortCount == 0) {
                 return false;
             }
@@ -347,7 +406,11 @@ public:
             {"port", local.port},
         });
         emitDiagnostic(
-            DiagnosticLevel::info, "Safaia discovery targets: " + joinAddresses(uniqueTargets));
+            DiagnosticLevel::info,
+            "Safaia discovery targets: " + joinAddresses(uniqueTargets)
+                + (options.targetProcessId == 0
+                       ? std::string{}
+                       : ", process ID " + std::to_string(options.targetProcessId)));
         return true;
     }
 
@@ -372,9 +435,32 @@ public:
     asio::awaitable<void> discoveryLoop() {
         while (running) {
             if (!discoveryPaused) {
+                std::vector<std::uint16_t> processPorts;
+                std::error_code processPortError;
+                if (options.targetProcessId != 0) {
+                    processPortError = findUdpPortsForProcess(
+                        options.targetProcessId, options.discoveryPortFirst,
+                        options.discoveryPortCount, processPorts);
+                    if (processPortError && !reportedProcessPortLookupFailure) {
+                        reportedProcessPortLookupFailure = true;
+                        emitDiagnostic(
+                            DiagnosticLevel::warning,
+                            "Safaia could not query UDP ports for process "
+                                + std::to_string(options.targetProcessId) + ": "
+                                + errorMessageUtf8(processPortError));
+                    } else if (!processPortError) {
+                        reportedProcessPortLookupFailure = false;
+                    }
+                }
                 for (const auto& endpoint : discoveryEndpoints) {
                     if (!running || discoveryPaused) {
                         break;
+                    }
+                    if (processPortError
+                        || (options.targetProcessId != 0
+                            && !std::binary_search(
+                                processPorts.begin(), processPorts.end(), endpoint.port()))) {
+                        continue;
                     }
                     asio::error_code error;
                     co_await discoverySocket.async_send_to(
@@ -470,6 +556,7 @@ public:
     asio::steady_timer discoveryTimer;
     std::vector<Udp::endpoint> discoveryEndpoints;
     std::unordered_set<std::string> reportedDiscoveryFailureAddresses;
+    bool reportedProcessPortLookupFailure = false;
     std::string discoveryPayload;
     Endpoint local;
     bool running = false;
@@ -598,6 +685,9 @@ public:
             close();
             return;
         }
+        if (rejected) {
+            return;
+        }
 
         if (frame.protocolId == SafaiaMessage::config) {
             const bool wasReady = ready;
@@ -649,6 +739,36 @@ public:
         const auto port = parsePort(document["connect_port"]);
         if (!port) {
             return;
+        }
+
+        if (auto service = owner.lock(); service && service->options.targetProcessId != 0) {
+            std::vector<std::uint16_t> processPorts;
+            const auto error = findUdpPortsForProcess(
+                service->options.targetProcessId, service->options.discoveryPortFirst,
+                service->options.discoveryPortCount, processPorts);
+            const auto owned = !error
+                && std::binary_search(
+                    processPorts.begin(), processPorts.end(), static_cast<std::uint16_t>(*port));
+            if (!owned) {
+                std::string message = "Safaia rejected session " + std::to_string(id)
+                    + ": connect_port " + std::to_string(*port)
+                    + " is not owned by process "
+                    + std::to_string(service->options.targetProcessId);
+                if (error) {
+                    message += " (UDP port query failed: " + errorMessageUtf8(error) + ')';
+                }
+                service->emitDiagnostic(DiagnosticLevel::warning, std::move(message));
+
+                rejected = true;
+                closeAfterWrite = true;
+                cancelTimer(handshakeTimer);
+                cancelTimer(idleTimer);
+                const auto response = jsonText({{"notify", "notify_block"}});
+                if (!enqueue(SafaiaMessage::connectBlocked, asBytes(response), false)) {
+                    close();
+                }
+                return;
+            }
         }
 
         if (document.contains("name") && document["name"].is_string()) {
@@ -727,6 +847,9 @@ public:
             pendingWriteBytes -= writeQueue.front().size();
             writeQueue.pop_front();
         }
+        if (closeAfterWrite && writeQueue.empty() && !closed) {
+            close();
+        }
         if (closed) {
             writeQueue.clear();
             pendingWriteBytes = 0;
@@ -746,6 +869,8 @@ public:
     std::size_t pendingWriteBytes = 0;
     bool writing = false;
     bool ready = false;
+    bool rejected = false;
+    bool closeAfterWrite = false;
     bool closed = false;
 };
 

@@ -48,6 +48,8 @@ while (applicationRunning) {
 
 `advertiseAddress` 是通过 discovery 告知 MC 的宿主 IPv4，默认 `127.0.0.1`。`discoveryTargets` 是 discovery 数据报的目标 IPv4；默认空列表表示自动枚举本机 IPv4，并向每个本机地址单播，不代表监听全部网卡。这能覆盖 Minecraft 将 Safaia UDP socket 绑定到虚拟网卡而非环回地址的情况。显式设置非空列表会关闭自动枚举。
 
+Windows 下可将 `targetProcessId` 设为目标 Minecraft 的 PID。非零时，每轮 discovery 都通过 IP Helper API 查询该进程当前占用的 Safaia UDP 端口，仅向 `discoveryPortFirst` 起连续 `discoveryPortCount` 个端口中的命中项发送，并在握手时校验 `connect_port` 归属，避免多实例串台。PID 为 `0` 保持全端口范围发送；其他平台使用非零 PID 启动服务会返回 `operation_not_supported`。PID 只用于本机端口归属查询，因此不能用于跨设备目标。
+
 跨设备时，将 `bindEndpoint.address` 和 `advertiseAddress` 设置为宿主局域网地址，将 `discoveryTargets` 设置为游戏设备地址。监听地址、广播地址和 discovery 目标相互独立。当前这些地址只接受 IPv4 字面量，不做 DNS 解析。
 
 ## 线程和生命周期
@@ -81,5 +83,7 @@ ctest --test-dir build/x64-msvc-debug --output-on-failure
 ```
 
 跨设备参数依次为 `宿主可达IPv4` 和 `游戏设备IPv4`。该程序仅构建，不注册为自动测试；需要人工启动 Minecraft 完成验证。
+
+Windows 本机 PID 定向模式额外传入第三个参数：`<宿主IPv4> <游戏设备IPv4或-> <Minecraft PID>`；第二个参数传 `-` 时保留本机 IPv4 自动枚举。
 
 完整验收步骤见 [`docs/testing/SafaiaManualTest.md`](docs/testing/SafaiaManualTest.md)。

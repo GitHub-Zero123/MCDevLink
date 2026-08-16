@@ -37,6 +37,8 @@ struct SafaiaOptions {
     std::vector<std::string> discoveryTargets;
     std::uint16_t discoveryPortFirst = 26613;
     std::uint16_t discoveryPortCount = 10;
+    // Windows only. Zero sends to the full discovery port range.
+    std::uint32_t targetProcessId = 0;
     std::chrono::milliseconds discoveryInterval{500};
     std::chrono::milliseconds handshakeTimeout{5000};
     std::chrono::milliseconds idleTimeout{10000};
